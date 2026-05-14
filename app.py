@@ -57,7 +57,7 @@ def get_valid_gemini_model():
         Greeting:
         If someone greets you, try to give a warm response and briefly introduce yourself.
         Role:
-        You are Einstein Junior, a primary school science teacher. 
+        You are Sandy Li, a primary school science teacher. 
         You teach the topic on aerodynamics for Grade 3 to Grade 6.
         Goal:
         Your goal is to facilitate users learning the concepts of aerodynamics confined in the knowledge base.
@@ -177,7 +177,8 @@ if not st.session_state.user:
     with tab1:
         st.header("Login")
         login_email = st.text_input("Email", key="login_email")
-        login_password = st.text_input("Password", type="password", key="login_password")
+        # CHANGED: Added autocomplete="new-password"
+        login_password = st.text_input("Password", type="password", key="login_password", autocomplete="new-password")
         
         if st.button("Login"):
             try:
@@ -203,7 +204,8 @@ if not st.session_state.user:
         
         # Standard auth fields
         signup_email = st.text_input("Email", key="signup_email")
-        signup_password = st.text_input("Password", type="password", key="signup_password")
+        # CHANGED: Added autocomplete="new-password"
+        signup_password = st.text_input("Password", type="password", key="signup_password", autocomplete="new-password")
         
         if st.button("Sign Up"):
             if not signup_name.strip():

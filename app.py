@@ -43,7 +43,7 @@ def get_valid_gemini_model():
         
     print("AVAILABLE MODELS:", available_models)   
     
-    preferred_models = ['gemini-3.1-flash-lite','gemini-2.5-flash','gemini-2.5-pro', 'gemini-flash-latest','gemini-3.1-pro-preview',  'gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
+    preferred_models = ['gemini-2.5-flash','gemini-3.1-flash-lite','gemini-2.5-pro', 'gemini-flash-latest','gemini-3.1-pro-preview',  'gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
     
     selected_model_name = available_models[0]
     for pref in preferred_models:

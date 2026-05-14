@@ -4,6 +4,8 @@ from google import genai
 from google.genai import types
 import time
 
+#st.title("HELLO WORLD")
+
 # --- 1. INITIALIZE SUPABASE & GEMINI ---
 @st.cache_resource
 def init_supabase() -> Client:
@@ -28,11 +30,9 @@ except Exception as e:
 @st.cache_resource
 def get_valid_gemini_model():
     if not gemini_client:
-        return None, None
+        return None, None, None
         
     available_models = []
-    # Ask Google which models this API key is allowed to use
-    # In the new SDK, we use .list() and check .supported_actions
     for m in gemini_client.models.list():
         if m.supported_actions and 'generateContent' in m.supported_actions:
             name = m.name.replace('models/', '')
@@ -41,10 +41,11 @@ def get_valid_gemini_model():
     if not available_models:
         raise ValueError("Your API key does not have access to any text generation models.")
         
-    # Try to prefer a standard model if available, otherwise just pick the first valid one
-    preferred_models = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
+    print("AVAILABLE MODELS:", available_models)   
     
-    selected_model_name = available_models[0] # Default to the first one found
+    preferred_models = ['gemini-2.5-flash','gemini-3.1-flash-lite','gemini-2.5-pro', 'gemini-flash-latest','gemini-3.1-pro-preview',  'gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
+    
+    selected_model_name = available_models[0]
     for pref in preferred_models:
         if pref in available_models:
             selected_model_name = pref
@@ -52,32 +53,51 @@ def get_valid_gemini_model():
             
     print(f"Auto-selected chat model: {selected_model_name}")
     
-    # --- DEFINE YOUR BOT'S PERSONA HERE ---
-    my_system_instruction = """
+    # --- NEW/CHANGED: Facilitator Persona with Handoff Trigger ---
+    facilitator_instruction = """
         Greeting:
         If someone greets you, try to give a warm response and briefly introduce yourself.
+        
         Role:
-        You are Einstein Junior, a primary school science teacher. 
+        You are Einstein Junior, a primary school science teacher (Facilitator). 
         You teach the topic on aerodynamics for Grade 3 to Grade 6.
+        
         Goal:
-        Your goal is to facilitate users learning the concepts of aerodynamics confined in the knowledge base.
+        Your goal is to facilitate users learning the concepts of aerodynamics confined in the knowledge base. 
+        
+        
         Behaviour:
-        When users ask you questions, you normally do not give them answers straightaway.
-        Instead, you guide and stimulate students to learn by posing questions to them and prompt them to answer. 
-        When users have problems in answering your questions, you may rephrase your questions or provide hints for them. 
-        When being asked questions beyond the scope of the knowledge base, try to redirect their interest to aerodynamics.
+        Guide and stimulate students to learn by posing questions to them and prompt them to answer. Do not give answers straightaway.
+        When users have problems, rephrase questions or provide hints. 
+        Redirect off-topic questions back to aerodynamics.
+        
+        CRITICAL HANDOFF INSTRUCTION:
+        Through the dialogues, if you identify the user has a good understanding of the key concepts of aerodynamics, you MUST append the exact word [HANDOFF] at the very end of your response. This will signal the Assessment Bot to take over. Do NOT ask them if they want a quiz yourself; just append [HANDOFF] when they are ready.
+        
         Personality:
-        You are an inviting teacher. Try to give encouragement to students as much as possible.
+        You are an inviting teacher. Give encouragement to students as much as possible.
+    """
+
+    # --- NEW/CHANGED: Assessment Bot Persona ---
+    assessment_instruction = """
+        Role:
+        You are Einstein Junior's assistant. You have just taken over the conversation from Einstein Junior because the user is ready for a quiz.
+        
+        Behaviour:
+        1. No need to introduce yourself.
+        2. If the user agrees to take the quiz, generate 5 Multiple-choice questions based on the knowledge base.
+        3. Ask ONE question at a time. Wait for the user to answer before moving on to the next.
+        4. When the user answers, tell them if they are correct or incorrect, briefly explain why using the knowledge base, and then ask the next question.
+        5. After all 5 questions have been answered, assess their overall performance with a grade (A for excellent, B for very good, C for developing, etc.) and provide an encouraging summary.
     """
     
-    # Return the model name and the instruction string to be used later in chat creation
-    return selected_model_name, my_system_instruction
+    return selected_model_name, facilitator_instruction, assessment_instruction
 
 try:
-    chat_model_name, system_instruction = get_valid_gemini_model()
+    chat_model_name, facilitator_instruction, assessment_instruction = get_valid_gemini_model()
 except Exception as e:
     st.error(f"Failed to load Gemini chat model: {e}")
-    chat_model_name, system_instruction = None, None
+    chat_model_name, facilitator_instruction, assessment_instruction = None, None, None
 
 # --- AUTOMATICALLY FIND A VALID EMBEDDING MODEL ---
 @st.cache_resource
@@ -87,22 +107,18 @@ def get_valid_embedding_model():
         
     available_embedding_models = []
     
-    # Ask Google which models support embeddings
     for m in gemini_client.models.list():
         if m.supported_actions and 'embedContent' in m.supported_actions:
             name = m.name.replace('models/', '')
             available_embedding_models.append(name)
             
     if not available_embedding_models:
-        # Fallback if supported_actions check fails but models exist
         available_embedding_models = ['text-embedding-004']
         
-    # Explicitly filter out the deprecated model that causes the 404 error
     working_models = [m for m in available_embedding_models if "text-embedding-004" not in m]
     
-    # If we found newer models, use the most recent one. Otherwise, fallback.
     if working_models:
-        selected_model = working_models[-1] # Grab the latest one in the list
+        selected_model = working_models[-1]
     else:
         selected_model = available_embedding_models[0]
         
@@ -111,7 +127,6 @@ def get_valid_embedding_model():
 
 # --- RAG HELPER FUNCTIONS ---
 def get_embedding(text: str) -> list[float]:
-    """Generates an embedding for the user's query using the latest Gemini model."""
     if not gemini_client:
         return []
         
@@ -128,8 +143,7 @@ def get_embedding(text: str) -> list[float]:
         st.error(f"Error generating embedding: {e}")
         return []
 
-def search_documents(query_embedding: list[float], match_threshold=0.7, match_count=3):
-    """Searches Supabase for the most relevant document chunks."""
+def search_documents(query_embedding: list[float], match_threshold=0.7, match_count=2):
     try:
         response = supabase.rpc(
             'match_document_chunks',
@@ -148,20 +162,27 @@ def search_documents(query_embedding: list[float], match_threshold=0.7, match_co
 if "user" not in st.session_state:
     st.session_state.user = None
 
-# Initialize UI chat history
 if "messages" not in st.session_state:
     st.session_state.messages = []
+
+# --- NEW/CHANGED: Track which bot is currently active ---
+if "active_bot" not in st.session_state:
+    st.session_state.active_bot = "facilitator"
 
 # --- 3. SIDEBAR ---
 with st.sidebar:
     st.title("My AI RAG App")
     if st.session_state.user:
         st.success(f"Logged in as: {st.session_state.user.email}")
+        
+        # --- NEW/CHANGED: Display current active bot status ---
+        st.info(f"Current Mode: {'👨‍🏫 Facilitator' if st.session_state.active_bot == 'facilitator' else '📝 Assessment'}")
+        
         if st.button("Log Out"):
             supabase.auth.sign_out()
             st.session_state.user = None
-            # Reset chat histories on logout
             st.session_state.messages = []
+            st.session_state.active_bot = "facilitator" # Reset bot state on logout
             st.rerun()
     else:
         st.warning("You are not logged in.")
@@ -169,16 +190,13 @@ with st.sidebar:
 # --- 4. MAIN APP LOGIC ---
 st.title("Welcome to the Future Science Classroom")
 
-# If the user is NOT logged in, show the Login/Sign Up tabs
 if not st.session_state.user:
     tab1, tab2 = st.tabs(["Login", "Sign Up"])
 
-    # --- LOGIN TAB ---
     with tab1:
         st.header("Login")
         login_email = st.text_input("Email", key="login_email")
-        # CHANGED: Added autocomplete="new-password"
-        login_password = st.text_input("Password", type="password", key="login_password", autocomplete="new-password")
+        login_password = st.text_input("Password", type="password", key="login_password", autocomplete="off")
         
         if st.button("Login"):
             try:
@@ -193,19 +211,15 @@ if not st.session_state.user:
             except Exception as e:
                 st.error(f"Login failed: {e}")
 
-    # --- SIGN UP TAB ---
     with tab2:
         st.header("Create an Account")
         
-        # New profile fields
         signup_name = st.text_input("Full Name", key="signup_name")
         signup_age = st.number_input("Age", min_value=1, max_value=120, step=1, value=18, key="signup_age")
         signup_gender = st.selectbox("Gender", ["Select...", "Male", "Female", "Non-binary", "Prefer not to say"], key="signup_gender")
         
-        # Standard auth fields
         signup_email = st.text_input("Email", key="signup_email")
-        # CHANGED: Added autocomplete="new-password"
-        signup_password = st.text_input("Password", type="password", key="signup_password", autocomplete="new-password")
+        signup_password = st.text_input("Password", type="password", key="signup_password", autocomplete="off")
         
         if st.button("Sign Up"):
             if not signup_name.strip():
@@ -216,7 +230,6 @@ if not st.session_state.user:
                 st.error("Please enter an email and password.")
             else:
                 try:
-                    # 1. Create the user in Auth
                     response = supabase.auth.sign_up({
                         "email": signup_email, 
                         "password": signup_password
@@ -224,8 +237,6 @@ if not st.session_state.user:
                     
                     if response.user:
                         st.success("Auth account created successfully! Now saving profile data...")
-                        
-                        # 2. Try to insert into the database WITH the new fields
                         try:
                             db_response = supabase.table("participants").insert({
                                 "participant_id": response.user.id,
@@ -244,30 +255,27 @@ if not st.session_state.user:
 
 # --- 5. LOGGED IN VIEW (GEMINI AI CHATBOT WITH RAG) ---
 else:
-    st.subheader("I am your beloved science teacher")
+    # Dynamic subheader based on active bot
+    if st.session_state.active_bot == "facilitator":
+        st.subheader("👨‍🏫 I am Einstein Junior, your science teacher!")
+    else:
+        st.subheader("📝 I am the Assessment Bot!")
     
     if not chat_model_name or not gemini_client:
         st.error("Cannot start chat because no compatible Gemini models were found for your API key.")
     else:
-        st.write("Ask me anything about aerodynamics!")
-
-        # Display chat messages from UI history on app rerun
         for message in st.session_state.messages:
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
 
-        # React to user input
-        if prompt := st.chat_input("What would you like to know?"):
+        if prompt := st.chat_input("Type your message here..."):
             
-            # 1. Display user message in chat message container
             with st.chat_message("user"):
                 st.markdown(prompt)
                 
-            # 2. Add user message to UI chat history BEFORE formatting for Gemini
             st.session_state.messages.append({"role": "user", "content": prompt})
 
-            # 3. Retrieve context from Supabase (RAG)
-            with st.spinner("Searching study materials..."):
+            with st.spinner("Thinking..."):
                 query_embedding = get_embedding(prompt)
                 retrieved_chunks = []
                 current_rag_context = ""
@@ -276,16 +284,13 @@ else:
                     retrieved_chunks = search_documents(query_embedding)
                     
                 if retrieved_chunks:
-                    # Combine the retrieved text chunks into a single context string
                     context_texts = [chunk['content'] for chunk in retrieved_chunks]
                     current_rag_context = "\n\n---\n\n".join(context_texts)
                 else:
-                    current_rag_context = "No specific context found in the study materials."
+                    current_rag_context = "No specific context found in the Knowledge Base."
 
-            # 4. Format the clean Chat History for Gemini using the new SDK types
             gemini_history = []
             
-            # We loop through all messages EXCEPT the very last one (the current prompt)
             for msg in st.session_state.messages[:-1]:
                 role = "user" if msg["role"] == "user" else "model"
                 gemini_history.append(
@@ -295,48 +300,60 @@ else:
                     )
                 )
 
-            # 5. Augment the prompt with the retrieved context
+            # --- NEW/CHANGED: Select the correct system instruction based on active bot ---
+            current_instruction = facilitator_instruction if st.session_state.active_bot == "facilitator" else assessment_instruction
+            bot_name_context = "Einstein Junior (Facilitator)" if st.session_state.active_bot == "facilitator" else "Assessment Bot"
+
             augmented_prompt = f"""
-            You are Einstein Junior. Use the following study materials to inform your response. 
-            Remember your persona: guide the student, ask questions, and don't just give away the answer immediately.
+            You are {bot_name_context}. Use the following Knowledge Base to inform your response. 
             
-            Study Materials Context:
+            Knowledge Base Context:
             {current_rag_context}
             
             Student's Query:
             {prompt}
             """
 
-            # 6. Display AI response in chat message container
             with st.chat_message("assistant"):
                 message_placeholder = st.empty()
                 
                 try:
-                    # Start a fresh chat session with the clean history and system instruction
                     chat_session = gemini_client.chats.create(
                         model=chat_model_name,
                         config=types.GenerateContentConfig(
-                            system_instruction=system_instruction,
+                            system_instruction=current_instruction, # Uses the dynamic instruction
                         ),
                         history=gemini_history
                     )
                     
-                    # Send augmented message to Gemini using the streaming method
                     response_stream = chat_session.send_message_stream(augmented_prompt)
                     
-                    # Stream the response to the UI
                     full_response = ""
                     for chunk in response_stream:
                         full_response += chunk.text
-                        message_placeholder.markdown(full_response + "▌")
+                        # Hide the [HANDOFF] tag from the UI while streaming if it appears
+                        display_text = full_response.replace("[HANDOFF]", "")
+                        message_placeholder.markdown(display_text + "▌")
                     
-                    # Finalize the message without the cursor
-                    message_placeholder.markdown(full_response)
+                    # --- NEW/CHANGED: Check for Handoff Signal ---
+                    if "[HANDOFF]" in full_response:
+                        # Clean the response and save it
+                        clean_response = full_response.replace("[HANDOFF]", "").strip()
+                        message_placeholder.markdown(clean_response)
+                        st.session_state.messages.append({"role": "assistant", "content": clean_response})
+                        
+                        # Switch state and inject the Assessment Bot's greeting
+                        st.session_state.active_bot = "assessment"
+                        handoff_greeting = "Hello! I am the Assessment Bot. Einstein Junior tells me you have a great understanding of aerodynamics! Would you like to take a 5-question quiz to test your knowledge?"
+                        st.session_state.messages.append({"role": "assistant", "content": handoff_greeting})
+                        
+                        # Rerun to show the new bot's message immediately
+                        st.rerun()
+                    else:
+                        # Normal response handling
+                        message_placeholder.markdown(full_response)
+                        st.session_state.messages.append({"role": "assistant", "content": full_response})
                     
-                    # 7. Add assistant response to UI chat history
-                    st.session_state.messages.append({"role": "assistant", "content": full_response})
-                    
-                    # --- SAVE TO STUDY LOGS ---
                     try:
                         supabase.table("study_logs").insert({
                             "participant_id": st.session_state.user.id,
@@ -346,7 +363,6 @@ else:
                         }).execute()
                     except Exception as db_log_error:
                         st.error(f"Failed to save log to database: {db_log_error}")
-                    # --------------------------------
                     
                 except Exception as e:
                     st.error(f"Error communicating with Gemini: {e}")

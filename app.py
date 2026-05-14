@@ -297,7 +297,7 @@ else:
 
             # 5. Augment the prompt with the retrieved context
             augmented_prompt = f"""
-            You are Sandy Li. Use the following study materials to inform your response. 
+            You are Einstein Junior. Use the following study materials to inform your response. 
             Remember your persona: guide the student, ask questions, and don't just give away the answer immediately.
             
             Study Materials Context:

@@ -359,7 +359,7 @@ else:
                             "participant_id": st.session_state.user.id,
                             "user_query": prompt,
                             "bot_response": full_response,
-                            "rag_context": current_rag_context
+           #                 "rag_context": current_rag_context
                         }).execute()
                     except Exception as db_log_error:
                         st.error(f"Failed to save log to database: {db_log_error}")
